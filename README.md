@@ -247,6 +247,36 @@ Editing `src/*_labels.txt` requires regenerating the matching
 `src/*_text_feats.bin` against the same text tower — or just use `--labels`, which
 does it at runtime.
 
+
+### How the LLM path compares
+
+Measured on the same 40-file sample used above, against two real local endpoints.
+
+| | local (`--clap`/`--clip`) | Qwen3 on vLLM | Gemma-4-E2B on MLX |
+|---|---|---|---|
+| coverage | 15/40 tagged, 40/40 described | 39/40 (one over the inline cap) | 40/40 |
+| speed/file | ~45 ms image, ~110 ms audio | **~36 s median** | ~1.8 s image |
+| image quality | one label: `character` | full sentence + 9 specific tags | full sentence + tags |
+| short SFX | `Place Flood.mp3` → `water splash` | — | "a very short audio clip" |
+
+Read that as a division of labour, not a ranking:
+
+- **For images an LLM wins outright.** `character` versus "a full-body digital
+  illustration of a muscular sumo wrestler standing with a serious expression" is
+  not a close call, and it costs a round trip per file.
+- **For short sound effects the local model wins.** CLAP identified a 0.43s clip as
+  `water splash`; a small multimodal LLM called the same file "a very short audio
+  clip". Sub-second SFX carry little for a general model to work with.
+- **Speed differs by three orders of magnitude.** 45 ms against 36 s is the
+  difference between describing a 200,000-file library on a laptop and not.
+- **LLMs invent specifics.** One run confidently named a sprite as a particular
+  character from a particular game. It may even have been right — but the local
+  path cannot make that class of error, because it can only choose from a list.
+
+Note that `--audio` sends the audio to whatever model you point at; many
+OpenAI-compatible servers accept the part and ignore it. If every file in a batch
+comes back described similarly, that is the signal.
+
 ## Using ross as a library
 
 The crate ships a lib as well as the binary, so a caller can embed one deriver

@@ -166,3 +166,22 @@ fn refuses_to_inline_media_over_the_cap() {
     let e = ross::semantic::analyze(&endpoint, "ask", &parts, None, "t", true).unwrap_err();
     assert!(e.contains("inline cap"), "{e}");
 }
+
+/// Embedded catalogue tags crowd out attached media: several different sound
+/// effects from one asset pack all came back described as the pack itself, so
+/// they are kept out of the prompt when the media is inlined. Verified here at
+/// the wire level — whatever the caller passes as `text` is what gets sent, so
+/// this pins the contract the pipeline relies on.
+#[test]
+fn the_text_block_is_sent_verbatim_alongside_media() {
+    let (url, rx) = mock(vec![(200, ok_body("x"))]);
+    let png = [0x89u8, b'P', b'N', b'G'];
+    let parts = [ross::semantic::Part { bytes: &png, mime: "image/png" }];
+    let lean = "Image file.\nMetadata:\n{\n  \"width\": 4\n}";
+    ross::semantic::analyze(&ep(&url), "ask", &parts, None, lean, true).expect("ok");
+    let sent: serde_json::Value = serde_json::from_str(&rx.recv().unwrap()).unwrap();
+    let content = sent["messages"][1]["content"].as_array().expect("array");
+    let text = content[0]["text"].as_str().unwrap();
+    assert_eq!(text, lean, "the prompt text must reach the model unmodified");
+    assert!(!text.contains("format_tags"));
+}

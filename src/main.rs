@@ -468,6 +468,20 @@ fn process_file(
                 ));
             }
             Some(ep) => {
+                // When the media itself is attached, embedded catalogue tags
+                // (album/artist/publisher) demonstrably crowd it out: three
+                // different sound effects from one asset pack came back with the
+                // same publisher-derived description until these were dropped.
+                // They stay in the JSON output, they just leave the prompt.
+                let prompt_meta = if entry["metadata"]["format_tags"].is_null() {
+                    meta_text.clone()
+                } else {
+                    let mut lean = entry["metadata"].clone();
+                    if let Some(o) = lean.as_object_mut() {
+                        o.remove("format_tags");
+                    }
+                    serde_json::to_string_pretty(&lean).unwrap_or_else(|_| meta_text.clone())
+                };
                 let owned: Vec<(Vec<u8>, String)>;
                 let audio: Option<(Vec<u8>, &str)>;
                 let text: String;
@@ -479,7 +493,7 @@ fn process_file(
                         };
                         owned = vec![(img, mime.to_string())];
                         audio = None;
-                        text = format!("Image file.\nMetadata:\n{meta_text}");
+                        text = format!("Image file.\nMetadata:\n{prompt_meta}");
                     }
                     Kind::Video => {
                         let dur = entry["metadata"]["duration_s"].as_f64();
@@ -489,7 +503,7 @@ fn process_file(
                         };
                         owned = frames.into_iter().map(|f| (f, "image/png".to_string())).collect();
                         audio = None;
-                        text = format!("Video (sample frames attached).\nMetadata:\n{meta_text}");
+                        text = format!("Video (sample frames attached).\nMetadata:\n{prompt_meta}");
                     }
                     Kind::Audio => {
                         owned = vec![];
@@ -501,7 +515,7 @@ fn process_file(
                         } else {
                             None
                         };
-                        text = format!("Audio file.\nMetadata:\n{meta_text}");
+                        text = format!("Audio file.\nMetadata:\n{prompt_meta}");
                     }
                 }
                 let images: Vec<Part<'_>> = owned
@@ -513,7 +527,7 @@ fn process_file(
                     Ok(v) => {
                         for k in ["tags", "description", "summary"] {
                             if !v[k].is_null() {
-                                entry[k] = v[k].clone();
+                                entry[k] = clean_field(&v[k]);
                             }
                         }
                         entry["model"] = json!(ep.model);
@@ -531,6 +545,21 @@ fn process_file(
     }
     entry["duration_ms"] = json!(t0.elapsed().as_millis() as u64);
     Outcome::Entry(entry)
+}
+
+/// Models return the odd `" warrior"` or a blank tag; trim before storing so the
+/// output is not littered with whitespace variants of the same label.
+fn clean_field(v: &Value) -> Value {
+    match v {
+        Value::String(s) => json!(s.trim()),
+        Value::Array(a) => Value::Array(
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::trim).filter(|s| !s.is_empty()))
+                .map(|s| json!(s))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 fn err_entry(path: &Path, e: String) -> Outcome {
