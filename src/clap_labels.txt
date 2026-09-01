@@ -1,0 +1,50 @@
+tense
+heroic
+somber
+triumphant
+ominous
+peaceful
+melancholic
+energetic
+mysterious
+playful
+epic
+eerie
+orchestral
+electronic
+military march
+ambient
+rock
+chiptune
+cinematic
+industrial
+folk
+synthwave
+brass
+strings
+percussion
+synth
+piano
+choir
+drums
+impact
+whoosh
+explosion
+gunshot
+laser
+sword clash
+footstep
+door creak
+button click
+notification chime
+construction
+mechanical
+magic spell
+creature roar
+scream
+laughter
+crowd
+water splash
+wind
+fire crackle
+glass break

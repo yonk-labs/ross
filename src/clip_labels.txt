@@ -1,0 +1,50 @@
+normal map
+mask map
+tiling texture
+sprite sheet
+icon
+user interface
+pixel art
+concept art
+3d render
+logo
+screenshot
+diagram
+person
+face
+character
+crowd
+animal
+creature
+robot
+vehicle
+aircraft
+spaceship
+boat
+building
+interior
+city
+landscape
+forest
+water
+sky
+mountain
+space
+dungeon
+weapon
+armor
+tool
+furniture
+food
+plant
+container
+potion
+coin
+book
+machine
+sign
+dark
+bright
+colorful
+monochrome
+transparent

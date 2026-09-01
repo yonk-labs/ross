@@ -1,0 +1,28 @@
+[package]
+name = "ross"
+version = "0.1.0"
+edition = "2021"
+description = "Media in, metadata and tags and descriptions out. Single binary, works offline."
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["media", "metadata", "tagging", "clip", "clap"]
+categories = ["command-line-utilities", "multimedia"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+base64 = "0.22"
+sha2 = "0.10"
+wait-timeout = "0.2"
+ort = "2.0.0-rc.13"
+symphonia = { version = "0.5", features = ["wav", "mp3", "ogg", "vorbis", "flac", "isomp4", "aac"] }
+rubato = "0.15"
+realfft = "3"
+tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
