@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Media in, metadata and tags and descriptions out. Single binary, works offline."
 license = "Apache-2.0"
+repository = "https://github.com/yonk-labs/ross"
 readme = "README.md"
 keywords = ["media", "metadata", "tagging", "clip", "clap"]
 categories = ["command-line-utilities", "multimedia"]
