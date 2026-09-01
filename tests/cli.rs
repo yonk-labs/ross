@@ -33,6 +33,21 @@ fn ffmpeg(args: &[&str]) {
     assert!(s.success(), "ffmpeg {args:?} failed");
 }
 
+/// Everything in a result except the per-file timing, which is meant to vary.
+/// Comparing raw stdout across runs would only ever test the clock.
+fn stable(json: &str) -> Value {
+    fn strip(mut e: Value) -> Value {
+        if let Some(o) = e.as_object_mut() {
+            o.remove("duration_ms");
+        }
+        e
+    }
+    match serde_json::from_str(json.trim()).expect("json") {
+        Value::Array(a) => Value::Array(a.into_iter().map(strip).collect()),
+        one => strip(one),
+    }
+}
+
 fn ross(args: &[&str]) -> (String, String, i32) {
     let out = Command::new(env!("CARGO_BIN_EXE_ross"))
         .args(args)
@@ -285,5 +300,134 @@ fn survives_a_closed_pipe() {
         assert!(!stderr.contains("Broken pipe") && !stderr.contains("panicked"),
                 "`{args}` panicked on a closed pipe: {stderr}");
         assert!(!out.stdout.is_empty(), "`{args}` produced nothing");
+    }
+}
+
+/// Directory walking: recurses, sorts deterministically, and skips symlinks so a
+/// self-referential link cannot loop the traversal.
+#[test]
+fn walks_directories_deterministically_and_skips_symlinks() {
+    if !have("ffmpeg", "-version") || !have("ffprobe", "-version") {
+        skip("ffmpeg/ffprobe not available");
+        return;
+    }
+    let root = tmp("walkdir");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("nested/deeper")).unwrap();
+    for p in ["b.wav", "nested/a.wav", "nested/deeper/c.wav"] {
+        ffmpeg(&["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-y",
+                 root.join(p).to_str().unwrap()]);
+    }
+    std::fs::write(root.join("notmedia.txt"), b"skip me").unwrap();
+    #[cfg(unix)]
+    let _ = std::os::unix::fs::symlink(&root, root.join("loop"));
+
+    let (stdout, _, code) = ross(&["--no-llm", "--json", "--quiet", root.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let paths: Vec<String> = v.as_array().unwrap().iter()
+        .map(|e| e["path"].as_str().unwrap().to_string()).collect();
+    assert_eq!(paths.len(), 3, "3 media files, no .txt, no symlink recursion: {paths:?}");
+    let mut sorted = paths.clone();
+    sorted.sort();
+    assert_eq!(paths, sorted, "output order must be deterministic");
+
+    // same tree twice must give identical results (timing aside)
+    let (again, _, _) = ross(&["--no-llm", "--json", "--quiet", root.to_str().unwrap()]);
+    assert_eq!(stable(&stdout), stable(&again), "repeat runs must be reproducible");
+}
+
+/// Flags that shape a run but were only ever exercised by hand.
+#[test]
+fn output_and_batching_flags() {
+    if !have("ffmpeg", "-version") || !have("ffprobe", "-version") {
+        skip("ffmpeg/ffprobe not available");
+        return;
+    }
+    let dir = tmp("flags");
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..4 {
+        ffmpeg(&["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-y",
+                 dir.join(format!("t{i}.wav")).to_str().unwrap()]);
+    }
+    // --format is the long form of --json/--md/--text
+    for (fmt, needle) in [("json", "\"sha256\""), ("md", "## "), ("text", "== ")] {
+        let (out, _, code) = ross(&["--no-llm", "--quiet", "--format", fmt, dir.to_str().unwrap()]);
+        assert_eq!(code, 0);
+        assert!(out.contains(needle), "--format {fmt} produced: {}", &out[..out.len().min(80)]);
+    }
+    // concurrency must not change results, only how fast they arrive
+    let (one, _, _) = ross(&["--no-llm", "--json", "--quiet", "-c", "1", dir.to_str().unwrap()]);
+    let (four, _, _) = ross(&["--no-llm", "--json", "--quiet", "-c", "4", dir.to_str().unwrap()]);
+    assert_eq!(stable(&one), stable(&four), "concurrency changed the output");
+
+    // --ask is accepted and does not disturb the deterministic pass
+    let (out, _, code) = ross(&["--no-llm", "--json", "--quiet", "--ask", "describe tersely",
+                                dir.join("t0.wav").to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(out.contains("\"sha256\""));
+}
+
+/// Video: frames are pulled with ffmpeg, so a clip must sniff as video, carry
+/// stream metadata, and — with --clip — get tagged from an extracted frame.
+/// A file that sniffs as video but yields no frame must error, not silently
+/// hand the model an empty attachment.
+#[test]
+fn video_frames_and_metadata() {
+    if !have("ffmpeg", "-version") || !have("ffprobe", "-version") {
+        skip("ffmpeg/ffprobe not available");
+        return;
+    }
+    let mp4 = tmp("clip.mp4");
+    ffmpeg(&["-f", "lavfi", "-i", "testsrc=duration=2:size=128x96:rate=10",
+             "-pix_fmt", "yuv420p", "-y", mp4.to_str().unwrap()]);
+
+    let (stdout, _, code) = ross(&["--no-llm", "--json", "--quiet", mp4.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let v: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["type"], "video");
+    assert_eq!(v["metadata"]["width"], 128);
+    assert_eq!(v["metadata"]["height"], 96);
+    assert!((v["metadata"]["duration_s"].as_f64().unwrap() - 2.0).abs() < 0.2);
+
+    // --clip tags video off a sampled frame
+    let (doc, _, _) = ross(&["--doctor"]);
+    if doc.lines().any(|l| l.starts_with("clip") && l.contains("ok")) {
+        let (stdout, _, code) = ross(&["--clip", "--no-llm", "--json", "--quiet",
+                                       mp4.to_str().unwrap()]);
+        assert_eq!(code, 0);
+        let v: Value = serde_json::from_str(stdout.trim()).unwrap();
+        assert!(v["description"].as_str().is_some_and(|d| !d.is_empty()),
+                "video should get a description from its frame");
+    }
+
+    // sniffs as mp4 by magic bytes, but ffprobe/ffmpeg can make nothing of it
+    let broken = tmp("broken.mp4");
+    std::fs::write(&broken, b"\x00\x00\x00\x20ftypisom").unwrap();
+    let (stdout, _, code) = ross(&["--no-llm", "--json", "--quiet", broken.to_str().unwrap()]);
+    assert_eq!(code, 0, "a bad file must not fail the batch");
+    let v: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert!(v["error"].as_str().is_some(), "expected a reported error: {v}");
+}
+
+/// The per-modality flags each need their own wiring; env coverage does not
+/// prove the CLI plumbing.
+#[test]
+fn every_modality_flag_is_wired() {
+    for (flag, model, row) in [
+        ("--vision-url", "--vision-model", "vision"),
+        ("--audio-url", "--audio-model", "audio"),
+        ("--video-url", "--video-model", "video"),
+    ] {
+        let (out, _, _) = ross(&["--doctor", "--url", "http://global", "--model", "gm",
+                                 flag, "http://specific", model, "sm"]);
+        assert!(out.lines().any(|l| l.starts_with(row) && l.contains("http://specific")
+                                    && l.contains("model=sm")),
+                "{flag} did not reach the {row} endpoint:\n{out}");
+        // the other two must still fall back to the global setting
+        for other in ["vision", "audio", "video"].iter().filter(|r| **r != row) {
+            assert!(out.lines().any(|l| l.starts_with(other) && l.contains("http://global")),
+                    "{other} should have inherited the global endpoint:\n{out}");
+        }
     }
 }

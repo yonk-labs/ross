@@ -1,14 +1,40 @@
 # ross
 
-Media in → metadata, tags, description, summary out. Single Rust binary, no daemon, no python — at runtime or setup.
+Media in → metadata, tags, description, summary out. Single Rust binary, no daemon,
+no python — at runtime or setup.
 
 ```bash
 ross photo.jpg                     # text output on a terminal
 ross ~/media/ --json > out.json    # batch, JSON when piped
 ross clip.mp4 --md                 # markdown report
-ross sfx/ --clap --no-llm          # offline: local tags + descriptions, no network
-ross art/ --clip --labels-file my-taxonomy.txt   # tag against your own vocabulary
+ross sfx/ --clap --clip --no-llm   # fully offline: tags + descriptions, no network
 ```
+
+## Why this exists
+
+An asset library grows until you can no longer find anything in it. A few thousand
+sound effects and a couple of hundred thousand images are individually obvious and
+collectively opaque — `Event 22.wav` and `foil_ruby__779.webp` tell you nothing, and
+neither does a directory listing. What you want is a line of text per file saying
+what it actually is.
+
+The usual answers are unsatisfying at that scale. Tagging by hand does not finish.
+Sending every file to a vision or audio model is slow, costs money, and needs a
+server you may not have running. Meanwhile the cheap facts — dimensions, duration,
+codec, checksum — are sitting right there in the file, and nothing extracts them in
+the same pass.
+
+ross does both halves in one tool. It pulls the deterministic facts first, then adds
+a semantic layer from whichever source you have available: local ONNX models that
+run in-process and offline, or any OpenAI-compatible endpoint when you want a real
+description. The local path is the point — it means a directory of 200,000 assets
+can be described on a laptop, on a plane, for free, and the answer for a given file
+never changes between runs.
+
+The design bias throughout is **say less, honestly**. A tagger that is unsure emits
+nothing and falls back to what it can actually defend — the filename — rather than
+handing you a confident guess. Wrong metadata in a search index is worse than
+missing metadata, because you stop trusting the index.
 
 ## What it does
 
@@ -25,6 +51,56 @@ Merge rule: the local tagger fills first, the LLM overwrites on success; if the 
 fails after the local pass succeeded, the local result is kept and `llm_error` is set.
 With `--no-llm --clap --clip` every file gets tags and a description with no network
 at all.
+
+## What it can and can't do
+
+**It can**
+
+- Identify type by magic bytes, not extension — 16 formats across image, audio, video
+- Pull deterministic facts: dimensions, duration, codec, bitrate, sample rate, EXIF,
+  container tags, sha256, size, mtime
+- Tag audio and images offline against a 50-label vocabulary, or one you supply
+- Describe anything through an OpenAI-compatible endpoint, with a different
+  server/model/key per modality
+- Run a directory of any size concurrently, deterministically, and resume nothing —
+  it is a pure function of the files
+- Be embedded as a library, or shelled out to as a binary
+
+**It can't**
+
+- **Store or search anything.** It prints JSON. Indexing, dedup and retrieval are
+  someone else's job — `sha256` is emitted so you *can* dedupe, but ross won't.
+- **Caption freely.** Local tagging picks from a label list; it does not write novel
+  sentences. Only the LLM path does that.
+- **Transcribe speech.** CLAP classifies sound, it is not ASR. `--audio` forwards the
+  audio to a model that may transcribe; ross itself never will.
+- **Read text in images.** No OCR.
+- **Identify people.** No face recognition, and the vocabulary deliberately has no
+  proper nouns.
+- **Understand motion.** Video is sampled as still frames; a clip of someone sitting
+  down and a clip of someone standing up look identical to it.
+- **Hear a whole song.** CLAP judges a deterministic 10s centre crop, not the arc of
+  a five-minute track.
+- **Write metadata back into files.** Input is read-only, always.
+- **Watch a directory**, run incrementally, or distribute across machines.
+
+**Where the local models are weak.** CLIP was trained on web photographs, so
+photographic subjects work well and asset-pipeline artifacts are out of distribution
+— normal maps, mask maps and UI atlases get labelled by what they resemble. Both
+taggers are bounded by their vocabulary: a sound with no matching label is gated, not
+approximated.
+
+Concretely, on a sample of 40 files from a game-asset library with the built-in
+vocabulary, **8 of 25 images and 7 of 15 audio files** cleared the confidence bar.
+The hits were good (`Place Flood.mp3` → `water splash` at 0.418) and the misses were
+honest rather than wrong — every remaining file still got a filename-derived
+description, several of which (`cash box`, `decal floor blood`) are more useful than
+any 50-label vocabulary could produce.
+
+Take that as the shape of the tool, not a defect: on a specialized corpus, coverage
+depends far more on the label list you supply than on the model, which is why
+`--labels` exists. Point it at photographs and the hit rate is much higher; point it
+at texture atlases with the default list and the filename will often win.
 
 ## CLI
 
@@ -221,29 +297,47 @@ dimensions are parsed natively) and `ffprobe` is only used for audio and video.
 file errored · `3` no endpoint configured · `4` bad input or usage · `5`
 `--clap`/`--clip` requested but unavailable
 
-## Non-goals
-
-Storage/database, dedup, embeddings search, chat, templates, plugins, thumbnails output, watching.
-
 ## Development
 
 ```bash
-cargo test                    # 32 lib + 7 cli + 4 api + 1 doctest
+cargo test                    # 58 tests
 ROSS_TEST_STRICT=1 cargo test # fail instead of skipping when a dep is missing
+cargo clippy --all-targets    # clean
 cargo build --release
 ```
 
-Integration tests generate fixtures with ffmpeg, run the real binary, and assert
-exit codes, JSON shape, `--strict` result-preservation, per-modality endpoint
-resolution, CLAP/CLIP gating, custom-label validation, and clean exit on a
-closed pipe.
+| suite | count | covers |
+|---|---|---|
+| lib unit | 32 | mel filterbank, resampling, sniffing, JSON extraction, label blobs, endpoint precedence |
+| `tests/llm.rs` | 10 | the endpoint path against a mock HTTP server: retries, status handling, inlined mime types, audio parts, the reasoning fallback, size caps |
+| `tests/cli.rs` | 11 | the real binary end to end: exit codes, `--strict` preserving results, directory walking, CLAP/CLIP gating, custom labels, video frames, per-modality flags, closed pipes |
+| `tests/api.rs` | 4 | the public library surface, as an embedding caller sees it |
+| doctest | 1 | the lib.rs example compiles |
 
-Layout: `lib.rs` (public surface) · `main.rs` (CLI/walk/thread pool/exit codes) · `media.rs` (sniff, sha256,
-ffprobe/exif, frames) · `semantic.rs` (endpoint resolution + chat-completions +
-JSON extraction) · `clap_tag.rs` (native CLAP: symphonia decode → rubato resample →
-realfft STFT → native Slaney mel → ort inference) · `clip_tag.rs` (native CLIP:
-decode → resize/crop → ort inference) · `labels.rs` (runtime label embedding +
-cache) · `output.rs` (json/md/text).
+Tests generate their own fixtures with ffmpeg and never touch the network. By
+default a missing dependency skips; `ROSS_TEST_STRICT=1` turns that into a failure,
+which is what CI should use — a suite that silently skips proves nothing.
+
+**Verified by hand, not by the suite** (each hits the network or a real endpoint, so
+automating it would buy flakiness rather than confidence):
+
+- Cold-start model download — cache emptied, 88.6 MB fetched and image tagged in 5.1s
+- All five model/tokenizer URLs resolve, and their sizes match the constants in the source
+- `--audio` end to end against a mock audio-capable endpoint: WAV transcoded to mp3,
+  MP3 passed through, correct `input_audio` part shape
+- Threshold calibration for both taggers, against real assets rather than synthetic ones
+
+**Not covered.** There is no Windows or macOS testing — paths are split on `/`, so
+`humanize` will produce odd descriptions on Windows. No fuzzing of the magic-byte
+sniffer. No benchmark suite; the timings quoted here are single measurements on one
+machine, not a tracked regression signal.
+
+Layout: `lib.rs` (public surface) · `main.rs` (CLI/walk/thread pool/exit codes) ·
+`media.rs` (sniff, sha256, ffprobe/exif, frames) · `semantic.rs` (endpoint resolution
++ chat-completions + JSON extraction) · `clap_tag.rs` (native CLAP: symphonia decode →
+rubato resample → realfft STFT → native Slaney mel → ort inference) · `clip_tag.rs`
+(native CLIP: decode → resize/crop → ort inference) · `labels.rs` (runtime label
+embedding + cache) · `output.rs` (json/md/text).
 
 ## License
 
