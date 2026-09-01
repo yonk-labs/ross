@@ -84,6 +84,20 @@ at all.
 - **Write metadata back into files.** Input is read-only, always.
 - **Watch a directory**, run incrementally, or distribute across machines.
 
+**Extreme aspect ratios lose most of the image.** CLIP preprocessing resizes the
+shortest edge and centre-crops, so a 1452x195 HUD strip keeps roughly 13% of its
+pixels and a tall sprite sheet keeps a band from the middle. This is faithful to the
+reference implementation rather than a bug in ross, but it means wide or tall assets
+are judged on a fragment. If that matters for your corpus, tag a pre-cropped tile
+rather than the strip.
+
+**Very large images are refused, not decoded.** Compressed size does not predict
+decoded size — a 133 KB palette PNG can be 139 megapixels and cost ~1 GB to decode,
+which multiplies by the worker count. Dimensions are checked from the header and
+anything over 100 MP returns a per-file error while the batch continues; the file
+still gets its metadata and a filename-derived description. `ROSS_MAX_PIXELS` raises
+the cap if you have the RAM for `limit x concurrency`.
+
 **Where the local models are weak.** CLIP was trained on web photographs, so
 photographic subjects work well and asset-pipeline artifacts are out of distribution
 — normal maps, mask maps and UI atlases get labelled by what they resemble. Both

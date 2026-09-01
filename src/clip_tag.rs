@@ -66,6 +66,7 @@ pub struct ClipTagger {
     labels: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum TagResult {
     /// Nothing cleared the confidence bar.
     Gated,
@@ -107,14 +108,25 @@ impl ClipTagger {
     }
 
     pub fn tag_path(&self, path: &Path) -> Result<TagResult, String> {
-        let img = image::open(path).map_err(|e| format!("decode image: {e}"))?;
-        self.tag_image(img)
+        let open = || {
+            image::ImageReader::open(path)
+                .map_err(|e| format!("open image: {e}"))?
+                .with_guessed_format()
+                .map_err(|e| format!("decode image: {e}"))
+        };
+        check_dimensions(open()?.into_dimensions().map_err(|e| format!("read header: {e}"))?)?;
+        self.tag_image(open()?.decode().map_err(|e| format!("decode image: {e}"))?)
     }
 
     /// For video: frames arrive as encoded PNG bytes already in memory.
     pub fn tag_bytes(&self, bytes: &[u8]) -> Result<TagResult, String> {
-        let img = image::load_from_memory(bytes).map_err(|e| format!("decode frame: {e}"))?;
-        self.tag_image(img)
+        let reader = || {
+            image::ImageReader::new(std::io::Cursor::new(bytes))
+                .with_guessed_format()
+                .map_err(|e| format!("decode frame: {e}"))
+        };
+        check_dimensions(reader()?.into_dimensions().map_err(|e| format!("read header: {e}"))?)?;
+        self.tag_image(reader()?.decode().map_err(|e| format!("decode frame: {e}"))?)
     }
 
     fn tag_image(&self, img: image::DynamicImage) -> Result<TagResult, String> {
@@ -174,6 +186,34 @@ impl ClipTagger {
             top,
         ))
     }
+}
+
+/// Reject oversized images from the header, before decoding them.
+///
+/// Compressed size says nothing about decoded size: a 133 KB palette PNG can be
+/// 139 megapixels and cost ~1 GB to decode, and that multiplies by the worker
+/// count — eight such files at the default concurrency peaked at 7 GB of RSS from
+/// 1.1 MB on disk. `image`'s own `Limits::max_alloc` is not enforced on every
+/// decode path, so the check has to happen up front. Reading dimensions parses
+/// only the header, which is what we needed in the first place.
+///
+/// The default admits a 100 MP image (~300 MB decoded); raise it with
+/// ROSS_MAX_PIXELS if you genuinely have larger ones and the RAM for
+/// `limit x concurrency`.
+fn check_dimensions((w, h): (u32, u32)) -> Result<(), String> {
+    let max: u64 = std::env::var("ROSS_MAX_PIXELS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000_000);
+    let px = w as u64 * h as u64;
+    if px > max {
+        return Err(format!(
+            "image is {w}x{h} = {} MP, over the {} MP decode cap (raise ROSS_MAX_PIXELS)",
+            px / 1_000_000,
+            max / 1_000_000
+        ));
+    }
+    Ok(())
 }
 
 /// Resize shortest edge to 224, center crop, scale to 0..1, normalize, CHW.

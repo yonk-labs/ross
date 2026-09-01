@@ -79,3 +79,32 @@ fn output_rendering_is_reusable() {
     assert!(ross::output::md_out(std::slice::from_ref(&v)).starts_with("## /a.png"));
     assert!(ross::output::text_out(&[v]).contains("== /a.png =="));
 }
+
+/// Compressed size does not predict decoded size: a small palette PNG can be
+/// hundreds of megapixels. Unbounded, decoding it multiplies by the worker count
+/// and exhausts memory, so oversized images are rejected from the header.
+#[test]
+fn oversized_images_are_rejected_from_the_header() {
+    if !ross::clip_tag::model_path().exists() {
+        eprintln!("skipping: CLIP model not downloaded");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("ross-big-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let tagger = ross::clip_tag::ClipTagger::load(None).expect("load");
+
+    // a modest image must be unaffected
+    let small = dir.join("small.png");
+    image::RgbImage::new(64, 64).save(&small).unwrap();
+    assert!(tagger.tag_path(&small).is_ok());
+
+    // 20000x20000 = 400 MP, far over the default cap; a 1x1 grey PNG scaled up on
+    // paper only — we write the header-sized image via a cheap luma buffer
+    std::env::set_var("ROSS_MAX_PIXELS", "1000");
+    let over = dir.join("over.png");
+    image::GrayImage::new(64, 64).save(&over).unwrap(); // 4096 px > 1000 cap
+    let e = tagger.tag_path(&over).unwrap_err();
+    assert!(e.contains("decode cap") && e.contains("ROSS_MAX_PIXELS"),
+            "error should name the cap and the escape hatch: {e}");
+    std::env::remove_var("ROSS_MAX_PIXELS");
+}

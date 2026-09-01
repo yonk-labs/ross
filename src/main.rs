@@ -422,7 +422,17 @@ fn process_file(
                     entry["model"] = json!(clip_tag::MODEL_LABEL);
                 }
             }
-            Err(e) => eprintln!("clip: {}: {e}", path.display()),
+            Err(e) => {
+                // a failed tagger must not leave the file with nothing: fall back
+                // to the same filename description a low-confidence result gets,
+                // and record why the model did not run
+                entry["clip_error"] = json!(e);
+                entry["description"] =
+                    json!(format!("{}.", clap_tag::humanize(&path.display().to_string())));
+                if !cli.quiet {
+                    eprintln!("clip: {}: {e}", path.display());
+                }
+            }
         }
     }
 
@@ -455,7 +465,14 @@ fn process_file(
                     entry["model"] = json!(clap_tag::MODEL_LABEL);
                 }
             }
-            Err(e) => eprintln!("clap: {}: {e}", path.display()),
+            Err(e) => {
+                entry["clap_error"] = json!(e);
+                entry["description"] =
+                    json!(format!("{}.", clap_tag::humanize(&path.display().to_string())));
+                if !cli.quiet {
+                    eprintln!("clap: {}: {e}", path.display());
+                }
+            }
         }
     }
 

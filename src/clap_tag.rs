@@ -98,6 +98,7 @@ pub struct ClapTagger {
     r2c: std::sync::Arc<dyn RealToComplex<f64>>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum TagResult {
     /// Too short, or no label cleared MIN_SCORE.
     Gated,
