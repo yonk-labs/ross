@@ -9,6 +9,14 @@ readme = "README.md"
 keywords = ["media", "metadata", "tagging", "clip", "clap"]
 categories = ["command-line-utilities", "multimedia"]
 
+[lib]
+name = "ross"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ross"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
@@ -27,3 +35,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 [profile.release]
 lto = true
 codegen-units = 1
+
+[dev-dependencies]
+# the api test builds fixture images through the public surface
+image = { version = "0.25", default-features = false, features = ["png"] }

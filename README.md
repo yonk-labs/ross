@@ -171,6 +171,42 @@ Editing `src/*_labels.txt` requires regenerating the matching
 `src/*_text_feats.bin` against the same text tower — or just use `--labels`, which
 does it at runtime.
 
+## Using ross as a library
+
+The crate ships a lib as well as the binary, so a caller can embed one deriver
+instead of the whole pipeline.
+
+```toml
+[dependencies]
+ross = { git = "https://github.com/yonk-labs/ross" }
+```
+
+```rust
+use ross::clip_tag::{ClipTagger, TagResult};
+
+// build the session once and reuse it — inference is cheap, session setup is not
+let tagger = ClipTagger::load(None)?;                       // or Some(vec![...]) for your own labels
+match tagger.tag_path(std::path::Path::new("art.png"))? {
+    TagResult::Tagged(tags, confidence) => println!("{tags:?} @ {confidence:.3}"),
+    TagResult::Gated => println!("no confident match"),     // caller decides the fallback
+}
+```
+
+`clap_tag` mirrors this for audio. `media::{sniff, sniff_bytes, exif_metadata,
+sha256_hex}` work with no model loaded and no external binary present, and
+`output::{json_out, md_out, text_out}` render the same shapes the CLI emits.
+
+Two things worth knowing before choosing this over shelling out to the binary:
+
+- **Inference serializes.** `ort` sessions need `&mut` to run, so the taggers hold
+  a `Mutex<Session>`. Sharing one across threads is safe but does not parallelize.
+- **ONNX keeps process-global state.** If your host process already loads ONNX
+  models, subprocess isolation may be the safer boundary — the binary is a
+  supported entry point precisely because of this.
+
+The image path needs no external binaries at all: `exiftool` is optional (PNG/WebP
+dimensions are parsed natively) and `ffprobe` is only used for audio and video.
+
 ## External binaries
 
 | Binary | Used for | Required |
@@ -192,7 +228,7 @@ Storage/database, dedup, embeddings search, chat, templates, plugins, thumbnails
 ## Development
 
 ```bash
-cargo test                    # 32 unit + 7 integration
+cargo test                    # 32 lib + 7 cli + 4 api + 1 doctest
 ROSS_TEST_STRICT=1 cargo test # fail instead of skipping when a dep is missing
 cargo build --release
 ```
@@ -202,7 +238,7 @@ exit codes, JSON shape, `--strict` result-preservation, per-modality endpoint
 resolution, CLAP/CLIP gating, custom-label validation, and clean exit on a
 closed pipe.
 
-Layout: `main.rs` (CLI/walk/thread pool/exit codes) · `media.rs` (sniff, sha256,
+Layout: `lib.rs` (public surface) · `main.rs` (CLI/walk/thread pool/exit codes) · `media.rs` (sniff, sha256,
 ffprobe/exif, frames) · `semantic.rs` (endpoint resolution + chat-completions +
 JSON extraction) · `clap_tag.rs` (native CLAP: symphonia decode → rubato resample →
 realfft STFT → native Slaney mel → ort inference) · `clip_tag.rs` (native CLIP:

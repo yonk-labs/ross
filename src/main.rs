@@ -1,9 +1,6 @@
-mod clap_tag;
-mod clip_tag;
-mod labels;
-mod media;
-mod output;
-mod semantic;
+// the crate's guts live in lib.rs so callers can link them; this binary is just
+// the CLI wiring on top
+use ross::{clap_tag, clip_tag, labels, media, output, semantic};
 
 use clap::{Parser, ValueEnum};
 use media::Kind;
