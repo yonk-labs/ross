@@ -25,10 +25,12 @@ pub struct TextTower {
 
 pub const CLIP: TextTower = TextTower {
     name: "CLIP text",
-    model_url: "https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/text_model.onnx",
-    model_file: "clip_text_fp32.onnx",
-    model_bytes: 169_800_000,
-    tokenizer_url: "https://huggingface.co/Xenova/mobileclip_s0/resolve/main/tokenizer.json",
+    model_url:
+        "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/text_model.onnx",
+    model_file: "clip_text.onnx",
+    model_bytes: 254_100_000,
+    tokenizer_url:
+        "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/tokenizer.json",
     tokenizer_file: "clip_tokenizer.json",
     output: "text_embeds",
     pad_to: Some(77),

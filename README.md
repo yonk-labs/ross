@@ -107,7 +107,7 @@ in-process. This is the description path when no LLM is configured.
 | flag | covers | model | download |
 |---|---|---|---|
 | `--clap` | audio | `larger_clap_general` audio tower | 78 MB (int8) |
-| `--clip` | images, video (one frame) | `mobileclip_s0` vision tower | 46 MB (fp32) |
+| `--clip` | images, video (one frame) | `clip-vit-base-patch32` vision tower | 89 MB (int8) |
 
 ```bash
 ross sfx/ --clap --no-llm --json
@@ -127,7 +127,7 @@ ross sfx/  --clap --labels-file audio-taxonomy.txt
 ```
 
 Phrases work better than bare words — `"a door opening"` beats `"door"`. The text
-towers are 170 MB (CLIP) and 127 MB (CLAP), downloaded only when you use custom
+towers are 254 MB (CLIP) and 127 MB (CLAP), downloaded only when you use custom
 labels, and never again for the same list.
 
 ### Confidence
@@ -152,13 +152,17 @@ decision. If your vocabulary is over- or under-eager, tune it:
 
 - Audio under 0.35s is too brief for a usable spectrogram and is gated on length
   alone (`ROSS_CLAP_MIN_SECONDS`). Over 10s, a deterministic centre crop is used.
-- **The CLIP model is fp32 on purpose.** Its int8 export is 12 MB instead of 46 MB,
-  but scores 27% on a 4-way task where chance is 25%, and agrees with its own fp32
-  weights on 0 of 16 images — quantization destroys this model. The audio model
-  survives int8 fine; `ROSS_CLAP_PRECISION=fp32` trades a 281 MB download for a
-  0.3s rather than 1.3s startup.
-- Startup is ~1.3s (CLAP) / ~0.4s (CLIP) to build the ONNX session, then ~110ms and
-  ~35ms per file. Batch runs amortize it.
+- **Both models are permissively licensed** — CLIP is MIT, CLAP is Apache-2.0, so
+  `--clip`/`--clap` are usable commercially. MobileCLIP-S0 is smaller and scored
+  slightly better on game art, but Apple ships it under a research-only licence
+  that also binds derived artifacts, so it is not an option here.
+- Both are int8. That is safe for these two, but not universal: MobileCLIP-S0's
+  int8 export scores 27% on a 4-way task where chance is 25% and agrees with its
+  own fp32 weights on 0 of 16 images. Verify before swapping a model for a
+  smaller quantization. `ROSS_CLAP_PRECISION=fp32` trades a 281 MB audio download
+  for a 0.3s rather than 1.3s startup.
+- Startup is ~1.3s (CLAP) / ~0.6s (CLIP) to build the ONNX session, then ~110ms and
+  ~45ms per file. Batch runs amortize it.
 - Because `--clap`/`--clip` were asked for explicitly, ross exits 5 rather than
   silently continuing without them.
 - Cache location: `ROSS_CLAP_CACHE`.

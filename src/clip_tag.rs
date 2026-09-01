@@ -1,11 +1,11 @@
-//! Zero-shot image tagging with MobileCLIP-S0, the visual twin of `clap_tag`:
+//! Zero-shot image tagging with OpenAI CLIP ViT-B/32, the visual twin of `clap_tag`:
 //! embed the image, take the cosine against precomputed label embeddings, and
 //! only emit what clears a confidence bar.
 //!
 //! Two things differ from the audio path and both are deliberate:
-//!   * fp32 weights, not int8. The int8 export of this model scores 27% on a
-//!     4-way task where chance is 25% — quantization destroys it. Measured, not
-//!     assumed; see README.
+//!   * int8 weights. Unlike MobileCLIP-S0 (whose int8 export collapses to chance
+//!     and agrees with its own fp32 weights on 0 of 16 images), CLIP B/32 survives
+//!     quantization — measured at parity with its fp32 form. 89 MB, not 351 MB.
 //!   * the vendored label embeddings are mean-centered. Raw CLIP text vectors sit
 //!     in a narrow cone (mean pairwise cosine 0.73), which squashes every score
 //!     into the same range; centering drops that to -0.02 and makes the margin
@@ -15,13 +15,17 @@ use ort::session::Session;
 use ort::value::Tensor;
 use std::path::{Path, PathBuf};
 
-pub const MODEL_LABEL: &str = "clip:mobileclip_s0";
+pub const MODEL_LABEL: &str = "clip:clip-vit-base-patch32";
 const MODEL_URL: &str =
-    "https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/vision_model.onnx";
-const MODEL_FILE: &str = "vision_model_fp32.onnx";
-const MODEL_BYTES: u64 = 45_500_000;
+    "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model_int8.onnx";
+const MODEL_FILE: &str = "clip_vision_int8.onnx";
+const MODEL_BYTES: u64 = 88_600_000;
 
-const SIDE: u32 = 256; // preprocessor_config: shortest_edge 256 + center crop 256
+const SIDE: u32 = 224; // preprocessor_config: shortest_edge 224 + center crop 224
+/// CLIP normalizes with these; MobileCLIP did not. Getting this wrong silently
+/// degrades every score rather than erroring.
+const MEAN: [f32; 3] = [0.48145466, 0.4578275, 0.40821073];
+const STD: [f32; 3] = [0.26862954, 0.2613026, 0.2757771];
 const EMB_DIM: usize = 512;
 const MAX_TAGS: usize = 3;
 
@@ -30,10 +34,14 @@ const MAX_TAGS: usize = 3;
 // a strong score alone, or a weaker one that stands clearly apart from the field.
 // See clap_tag: the absolute floor is vocabulary-size dependent, the margin is
 // not. Override with ROSS_CLIP_MIN_SCORE / _DISTINCT / _MARGIN.
-const MIN_SCORE: f64 = 0.055;
-const MIN_SCORE_DISTINCT: f64 = 0.030;
+// Calibrated against real asset images: top scores span 0.10-0.18 (median 0.148),
+// margins 0.00-0.07. CLIP packs its labels closer together than the audio model
+// does, so the margin bar sits low here — at 0.035 it was discarding correct
+// answers (a UI button scoring icon=0.138 with only 0.015 of daylight).
+const MIN_SCORE: f64 = 0.160;
+const MIN_SCORE_DISTINCT: f64 = 0.105;
 const MIN_MARGIN: f64 = 0.012;
-const REL_KEEP: f64 = 0.55;
+const REL_KEEP: f64 = 0.80;
 
 /// Mean-centered, unit-norm CLIP text embeddings, [50][512] row-major f32,
 /// in the same order as LABELS. Regenerate both together (see README).
@@ -168,8 +176,7 @@ impl ClipTagger {
     }
 }
 
-/// Resize shortest edge to 256, center crop, scale to 0..1, CHW.
-/// `do_normalize` is false for this model — no ImageNet mean/std.
+/// Resize shortest edge to 224, center crop, scale to 0..1, normalize, CHW.
 fn preprocess(img: image::DynamicImage) -> Vec<f32> {
     use image::imageops::FilterType;
     let rgb = img.to_rgb8();
@@ -185,9 +192,9 @@ fn preprocess(img: image::DynamicImage) -> Vec<f32> {
         for x in 0..SIDE {
             let p = resized.get_pixel(ox + x, oy + y).0;
             let i = (y * SIDE + x) as usize;
-            out[i] = p[0] as f32 / 255.0;
-            out[plane + i] = p[1] as f32 / 255.0;
-            out[2 * plane + i] = p[2] as f32 / 255.0;
+            out[i] = (p[0] as f32 / 255.0 - MEAN[0]) / STD[0];
+            out[plane + i] = (p[1] as f32 / 255.0 - MEAN[1]) / STD[1];
+            out[2 * plane + i] = (p[2] as f32 / 255.0 - MEAN[2]) / STD[2];
         }
     }
     out
@@ -240,11 +247,14 @@ mod tests {
         assert!(mean.abs() < 0.15, "labels are not decorrelated: mean cosine {mean:.3}");
     }
 
+    /// A non-square input must still come out as a square, correctly normalized
+    /// plane-major tensor — the resize/crop is easy to get subtly wrong.
     #[test]
     fn preprocess_shape_and_range() {
         let img = image::DynamicImage::new_rgb8(64, 300);
         let p = preprocess(img);
-        assert_eq!(p.len(), 3 * 256 * 256);
-        assert!(p.iter().all(|v| (0.0..=1.0).contains(v)));
+        assert_eq!(p.len(), 3 * (SIDE as usize) * (SIDE as usize));
+        // normalized, so the range is roughly [-2, 2] rather than [0, 1]
+        assert!(p.iter().all(|v| v.is_finite() && v.abs() < 4.0));
     }
 }

@@ -19,9 +19,11 @@ limitations under the License.
 Third-party models downloaded at runtime (not distributed with this source):
 
   Xenova/larger_clap_general      ONNX export of laion/larger_clap_general
-  Xenova/mobileclip_s0            ONNX export of apple/MobileCLIP-S0
+                                  (Apache-2.0)
+  Xenova/clip-vit-base-patch32    ONNX export of openai/clip-vit-base-patch32
+                                  (MIT)
 
 These are fetched from Hugging Face on first use of --clap / --clip and are
-governed by their own upstream licenses. The precomputed label embeddings in
+governed by their own upstream licenses, both of which permit commercial use. The precomputed label embeddings in
 src/clap_text_feats.bin and src/clip_text_feats.bin are derived from the text
 towers of those models.
