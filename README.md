@@ -148,7 +148,7 @@ Any OpenAI chat-completions base URL: OpenAI, vLLM `/v1`, Ollama `/v1`, LM Studi
 One endpoint for everything:
 
 ```bash
-export ROSS_URL=http://192.168.1.133:8000/v1
+export ROSS_URL=http://your-vllm-host:8000/v1
 export ROSS_MODEL=qwen36-nvfp4
 ross ~/media/ --json
 ```
