@@ -30,6 +30,7 @@ symphonia = { version = "0.5", features = ["wav", "mp3", "ogg", "vorbis", "flac"
 rubato = "0.15"
 realfft = "3"
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+tempfile = "3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
 
 [profile.release]

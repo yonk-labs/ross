@@ -72,6 +72,9 @@ struct Cli {
     #[arg(long, help = "exit 2 if any file errored (results are still printed)")]
     strict: bool,
 
+    #[arg(long, help = "also write each result beside its file as <path>.ross.json")]
+    sidecar: bool,
+
     #[arg(short, long, help = "global endpoint base URL (ROSS_URL)")]
     url: Option<String>,
 
@@ -136,6 +139,34 @@ fn emit(s: &str) {
 enum Outcome {
     Entry(Value),
     Skipped(String),
+}
+
+/// `art/x.png` -> `art/x.png.ross.json`. The whole original name is kept rather
+/// than the stem, so `x.png` and `x.jpg` cannot land on the same sidecar, and the
+/// suffix is namespaced because asset trees already carry other tools' sidecars
+/// (Unity's `.meta`, darktable's `.xmp`).
+fn sidecar_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".ross.json");
+    path.with_file_name(name)
+}
+
+/// Written per file as the batch runs, not at the end, so an interrupted run
+/// keeps everything it had already finished. Atomic: temp file in the same
+/// directory then rename, so a crash mid-write cannot leave a truncated sidecar
+/// that later parses as valid-but-wrong.
+fn write_sidecar(path: &Path, entry: &Value) -> Result<(), String> {
+    let out = sidecar_path(path);
+    let dir = out.parent().ok_or("sidecar has no parent directory")?;
+    let mut body = serde_json::to_vec_pretty(entry).map_err(|e| e.to_string())?;
+    body.push(b'\n');
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".ross-tmp-")
+        .tempfile_in(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    tmp.write_all(&body).map_err(|e| e.to_string())?;
+    tmp.persist(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    Ok(())
 }
 
 /// "explosion, impact" -> "Explosion, impact." Shared by the CLAP and CLIP paths.
@@ -291,7 +322,14 @@ fn main() {
                     }
                 }
                 match outcome {
-                    Outcome::Entry(v) => results.lock().unwrap()[i] = Some(v),
+                    Outcome::Entry(v) => {
+                        if cli.sidecar {
+                            if let Err(e) = write_sidecar(path, &v) {
+                                eprintln!("ross: sidecar for {}: {e}", path.display());
+                            }
+                        }
+                        results.lock().unwrap()[i] = Some(v)
+                    }
                     Outcome::Skipped(msg) => {
                         if !cli.quiet {
                             eprintln!("skipped: {msg}");

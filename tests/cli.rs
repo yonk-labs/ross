@@ -431,3 +431,63 @@ fn every_modality_flag_is_wired() {
         }
     }
 }
+
+/// `--sidecar` writes each result beside its file. It is opt-in because the
+/// alternative is doubling the file count of an asset tree.
+#[test]
+fn sidecar_writes_one_json_per_media_file() {
+    if !have("ffmpeg", "-version") || !have("ffprobe", "-version") {
+        skip("ffmpeg/ffprobe not available");
+        return;
+    }
+    let dir = tmp("sidecar");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    ffmpeg(&["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-y",
+             dir.join("a.wav").to_str().unwrap()]);
+    ffmpeg(&["-f", "lavfi", "-i", "testsrc=duration=1:size=32x32:rate=1", "-frames:v", "1",
+             "-update", "1", "-y", dir.join("a.png").to_str().unwrap()]);
+    std::fs::write(dir.join("notes.txt"), b"not media").unwrap();
+    let sidecars = || {
+        let mut v: Vec<String> = std::fs::read_dir(&dir).unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".ross.json"))
+            .collect();
+        v.sort();
+        v
+    };
+
+    // off unless asked for
+    let (_, _, code) = ross(&["--no-llm", "--quiet", "--json", dir.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(sidecars().is_empty(), "no sidecars without the flag: {:?}", sidecars());
+
+    let (stdout, _, code) = ross(&["--no-llm", "--quiet", "--json", "--sidecar",
+                                   dir.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    // the full original name is kept, so a.png and a.wav cannot collide
+    assert_eq!(sidecars(), vec!["a.png.ross.json", "a.wav.ross.json"]);
+
+    // each sidecar must match what stdout reported for that file
+    let all: Value = serde_json::from_str(stdout.trim()).unwrap();
+    for e in all.as_array().unwrap() {
+        let p = std::path::Path::new(e["path"].as_str().unwrap());
+        let mut name = p.file_name().unwrap().to_os_string();
+        name.push(".ross.json");
+        let body = std::fs::read_to_string(dir.join(name)).expect("sidecar exists");
+        let got: Value = serde_json::from_str(&body).expect("valid json");
+        assert_eq!(got["sha256"], e["sha256"]);
+        assert_eq!(got["path"], e["path"]);
+    }
+
+    // a second run must not ingest its own sidecars, and must leave no temp files
+    let (stdout, _, _) = ross(&["--no-llm", "--quiet", "--json", "--sidecar",
+                                dir.to_str().unwrap()]);
+    let again: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(again.as_array().unwrap().len(), 2, "sidecars must not be treated as input");
+    assert_eq!(sidecars().len(), 2);
+    assert!(!std::fs::read_dir(&dir).unwrap().any(|e| e.unwrap()
+                .file_name().to_string_lossy().starts_with(".ross-tmp-")),
+            "atomic write left a temp file behind");
+}

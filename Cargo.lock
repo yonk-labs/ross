@@ -1591,6 +1591,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "symphonia",
+ "tempfile",
  "tokenizers",
  "wait-timeout",
 ]

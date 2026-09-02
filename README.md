@@ -8,6 +8,7 @@ ross photo.jpg                     # text output on a terminal
 ross ~/media/ --json > out.json    # batch, JSON when piped
 ross clip.mp4 --md                 # markdown report
 ross sfx/ --clap --clip --no-llm   # fully offline: tags + descriptions, no network
+ross art/ --clip --sidecar         # leave a .ross.json beside each file
 ```
 
 ## Why this exists
@@ -81,7 +82,12 @@ at all.
   down and a clip of someone standing up look identical to it.
 - **Hear a whole song.** CLAP judges a deterministic 10s centre crop, not the arc of
   a five-minute track.
-- **Write metadata back into files.** Input is read-only, always.
+- **Write metadata back into files.** Input is read-only, always. `--sidecar`
+  writes results *beside* a file (`photo.png.ross.json`), never into it, so the
+  original bytes and their `sha256` stay exactly as they were. Embedding a
+  description into EXIF or ID3 would change the file's hash, which is the identity
+  everything downstream keys on. Sidecars are opt-in because one per media file
+  doubles the file count of an asset tree; `rm **/*.ross.json` is the undo.
 - **Watch a directory**, run incrementally, or distribute across machines.
 
 **Extreme aspect ratios lose most of the image.** CLIP preprocessing resizes the
@@ -133,6 +139,7 @@ ross [PATHS]...
   --frames N              video frames sampled for the model (default 4)
   --concurrency N         worker threads (default min(8, cpus))
   --strict                exit 2 if any file errored (results are still printed)
+  --sidecar               also write each result as <path>.ross.json beside the file
   --quiet                 no per-file progress on stderr
   --doctor                check external binaries + endpoint config
   --url / --model                    global endpoint + model
